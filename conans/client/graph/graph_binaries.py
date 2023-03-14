@@ -187,10 +187,19 @@ class GraphBinariesAnalyzer(object):
             if not self._evaluate_clean_pkg_folder_dirty(node, package_layout):
                 break
 
-        if cache_latest_prev is None:  # This binary does NOT exist in the cache
-            self._evaluate_download(node)
-        else:  # This binary already exists in the cache, maybe can be updated
-            self._evaluate_in_cache(cache_latest_prev, node)
+        if build_mode.local:
+            if cache_latest_prev is None:
+                node.should_build = True
+                node.binary = BINARY_MISSING
+            else:
+                node.binary = BINARY_CACHE
+                node.binary_remote = None
+                node.prev = cache_latest_prev.revision
+        else:
+            if cache_latest_prev is None:  # This binary does NOT exist in the cache
+                self._evaluate_download(node)
+            else:  # This binary already exists in the cache, maybe can be updated
+                self._evaluate_in_cache(cache_latest_prev, node)
 
         # The INVALID should only prevail if a compatible package, due to removal of
         # settings in package_id() was not found

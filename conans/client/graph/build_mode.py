@@ -15,6 +15,7 @@ class BuildMode:
         self.missing = False
         self.never = False
         self.cascade = False
+        self.local = False
         self.editable = False
         self.patterns = []
         self.build_missing_patterns = []
@@ -37,6 +38,8 @@ class BuildMode:
                     self.never = True
                 elif param == "cascade":
                     self.cascade = True
+                elif param == "local":
+                    self.local = True
                 else:
                     if param.startswith("missing:"):
                         clean_pattern = param[len("missing:"):]
@@ -97,6 +100,8 @@ class BuildMode:
     def allowed(self, conan_file):
         if self.never or conan_file.build_policy == "never":  # this package has been export-pkg
             return False
+        if self.local:
+            return True
         if self.missing:
             return True
         if conan_file.build_policy == "missing":

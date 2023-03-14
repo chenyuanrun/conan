@@ -11,6 +11,8 @@ _help_build_policies = '''Optional, specify which packages to build from source.
     --build=missing    Build packages from source whose binary package is not found.
     --build=cascade    Build packages from source that have at least one dependency being built from
                        source.
+    --build=local      Build package from recipe if the package is missing in local cache, but never
+                       download prebuilt binary package.
     --build=[pattern]  Build packages from source whose package reference matches the pattern. The
                        pattern uses 'fnmatch' style wildcards.
     --build=![pattern] Excluded packages, which will not be built from the source, whose package
