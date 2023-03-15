@@ -1,24 +1,25 @@
+from copy import copy, deepcopy
+from hashlib import sha256
+import hashlib
+from mimetypes import read_mime_types
 import shutil
 import sys
 import os
-from typing import Any, List, Optional
+from typing import Any, List
 import json
-import urllib.request
 import urllib.parse
 from requests import request
 import requests
 import yaml
+import humanize
 
-blacklist = {
-    "9dcfba4c2efa8d44bf4cc9edd324794865dd6d6331467d3c69f5c5574db3844e": "https://gitlab-lepuy.iut-clermont.uca.fr/opengl/imagl/-/archive/v0.1.0/imagl-v0.1.0.tar.gz",
-    "4a7502cc733431af6423246fe5144e2eddb984454a66cca51742c852980ac862": "https://gitlab-lepuy.iut-clermont.uca.fr/opengl/imagl/-/archive/v0.1.1/imagl-v0.1.1.tar.gz",
-    "d1edf74e00f969a47dc56e4400b805600d6997270339d49e91b7c6112a2cb37e": "https://gitlab-lepuy.iut-clermont.uca.fr/opengl/imagl/-/archive/v0.1.2/imagl-v0.1.2.tar.gz",
-    "5a68cdeff4338e411695cca16c4230567de298f8efee2a9fadcc6fa644a70248": "https://gitlab-lepuy.iut-clermont.uca.fr/opengl/imagl/-/archive/v0.2.1/imagl-v0.2.1.tar.gz",
-    "c03f80c66f28e86b3cc7c98d14afab6bec8eb9366476f6bdda8469c35f52b18a": "https://iweb.dl.sourceforge.net/project/wtl/WTL%209.1/WTL%209.1.5321%20Final/WTL91_5321_Final.zip",
-    "b9fff11c36532c5fa0114b3c7ee4f752cbef71c7ddfd2e5f88f6f51f15431104": "https://iweb.dl.sourceforge.net/project/wtl/WTL%2010/WTL%2010.0.9163/WTL10_9163.zip",
-}
+blacklist = {}
 
-blacklist_pkg = ["android-ndk", "archicad-apidevkit"]
+blacklist_pkg = ["android-ndk", "archicad-apidevkit", "qt", "zulu-openjdk", "physx",
+                 "openjdk", "cern-root", "geotrans", "strawberryperl", "imagl", "wtl",
+                 "openvr", "ogre", "bullet3", "ktx", "osgearth", "libnova", "mpir",
+                 "angelscript", "voropp", "co", "eabase", "ignition-tools", "sophus",
+                 "stx", "troldal-zippy"]
 
 class Item:
     def __init__(self, sha256: str, url: List[str]) -> None:
@@ -32,6 +33,10 @@ class Manifest:
     def append(self, item: Item):
         print(f"Add item {item.url} {item.sha256}")
         self._manifest["files"][item.sha256] = { "url": item.url }
+
+    def remove(self, item: Item):
+        if item.sha256 in self._manifest["files"]:
+            self._manifest["files"].pop(item.sha256)
 
     def flush(self):
         file = open(self._path, "w")
@@ -50,13 +55,30 @@ class Manifest:
             i += 1
         shutil.copy2(self._path, f"{self._path}.{i}")
 
+    def convert_url_to_list(self):
+        for sha256 in self._manifest["files"]:
+            url = self._manifest["files"][sha256]["url"]
+            if not isinstance(url, (list, tuple)):
+                url = [url]
+                self._manifest["files"][sha256]["url"] = url
+
+    def sha256_to_lower(self):
+        new_manifest = deepcopy(self._manifest)
+        for sha256 in self._manifest["files"]:
+            sha256_l = sha256.lower()
+            if sha256 != sha256_l:
+                print(f"Convert {sha256} to {sha256_l}")
+                item = new_manifest["files"].pop(sha256)
+                new_manifest["files"][sha256_l] = item
+        self._manifest = new_manifest
+
 def is_blacklist_pkg(filename) -> bool:
     for p in blacklist_pkg:
-        if f"recipes/{p}" in filename:
+        if f"recipes/{p}/" in filename:
             return True
     return False
 
-def parse_from_cci(cci: str) -> List[Item]:
+def parse_from_cci(cci: str, need_blacklist = False) -> List[Item]:
     items = list()
     conandatas = list()
     for dirpath, dirnames, filenames in os.walk(os.path.join(cci, "recipes")):
@@ -64,10 +86,16 @@ def parse_from_cci(cci: str) -> List[Item]:
             #print(f"{dirpath} {dirnames} {filenames}")
             if filename.endswith("conandata.yml"):
                 f = os.path.join(dirpath, filename)
-                if is_blacklist_pkg(f):
-                    print(f"Skip file {f}")
+
+                if need_blacklist:
+                    if is_blacklist_pkg(f):
+                        print(f"Add blacklist file {f}")
+                        conandatas.append(f)
                 else:
-                    conandatas.append(f)
+                    if is_blacklist_pkg(f):
+                        print(f"Skip file {f}")
+                    else:
+                        conandatas.append(f)
     for conandata in conandatas:
         items.extend(parse_from_conandata(conandata))
     return items
@@ -83,7 +111,7 @@ def try_extract(obj: Any) -> List[Item]:
             url_parsed = list()
             for i in url:
                 url_parsed.append(("%20").join(i.split(" ")))
-            items.append(Item(obj["sha256"], url_parsed))
+            items.append(Item(obj["sha256"].lower(), url_parsed))
         else:
             for k in obj:
                 items.extend(try_extract(obj[k]))
@@ -159,6 +187,19 @@ def download_to(dst: str, url: str, sha256: str) -> bool:
     else:
         return True
 
+def hash_from_path(filename: str):
+    hash = filename[-65:]
+    hash = hash.replace("/", "")
+    return hash
+
+def hash_to_path(sha256: str):
+    return os.path.join(sha256[0:2], sha256[2:])
+
+def hash_sha256(path: str) -> str:
+    with open(path, "rb") as f:
+        data = f.read()
+        return hashlib.sha256(data).hexdigest().lower()
+
 # Commands
 
 def cmd_download_from_cci(cci: str, dst: str):
@@ -173,5 +214,109 @@ def cmd_download_from_cci(cci: str, dst: str):
                 manifest.flush()
                 break
 
+def cmd_convert_to_list(cci: str, dst: str):
+    manifest = read_manifest(dst)
+    manifest.backup()
+    manifest.convert_url_to_list()
+    manifest.flush()
+
+class DistFile:
+    def __init__(self, path, stat) -> None:
+        self.path = path
+        self.stat = stat
+        pass
+
+def cmd_sort_files(cci: str, dst: str):
+    files = list()
+    manifest = read_manifest(dst)
+    for dirpath, dirnames, filenames in os.walk(os.path.join(dst, "files")):
+        for filename in filenames:
+            f = os.path.join(dirpath, filename)
+            stat = os.stat(f)
+            files.append(DistFile(f, stat))
+    files.sort(key=lambda f: f.stat.st_size)
+    for file in files:
+        size = humanize.naturalsize(file.stat.st_size, binary=True)
+        sha256 = hash_from_path(file.path)
+        try:
+            url = manifest._manifest["files"][sha256]["url"]
+        except:
+            url = "Unknown"
+        print(f"{size}\t{file.path}\t{url}")
+
+def cmd_to_lower(cci: str, dst: str):
+    manifest = read_manifest(dst)
+    manifest.backup()
+    manifest.sha256_to_lower()
+    manifest.flush()
+
+def cmd_filename_to_lower(cci: str, dst: str):
+    for dirpath, dirnames, filenames in os.walk(os.path.join(dst, "files")):
+        for filename in filenames:
+            f = os.path.join(dirpath, filename)
+            f_l = f.lower()
+            if f != f_l:
+                print(f"Move {f} to {f_l}")
+                shutil.move(f, f_l)
+
+def cmd_clean_for_blacklist(cci: str, dst: str):
+    items = parse_from_cci(cci, need_blacklist=True)
+    manifest = read_manifest(dst)
+    manifest.backup()
+    for item in items:
+        file = os.path.join(dst, "files", hash_to_path(item.sha256))
+        if os.path.exists(file):
+            print(f"Remove {file}")
+            os.remove(file)
+        manifest.remove(item)
+    manifest.flush()
+
+def cmd_check_consistency(cci: str, dst: str):
+    manifest = read_manifest(dst)
+    manifest.backup()
+    manifest_ori = deepcopy(manifest._manifest)
+    for sha256 in manifest_ori["files"]:
+        file = os.path.join(dst, "files", hash_to_path(sha256))
+        if not os.path.exists(file):
+            print(f"File for {sha256} not exist {file}")
+            manifest._manifest["files"].pop(sha256)
+        else:
+            # Check sum
+            size = os.stat(file).st_size
+            if size <= 10 * 1024 * 1024 and hash_sha256(file) != sha256:
+                print(f"Hash mismatch for file {file}, remove it")
+                os.remove(file)   
+                manifest._manifest["files"].pop(sha256)
+    manifest.flush()
+
+def cmd_garbage_collection(cci: str, dst: str):
+    files = list()
+    manifest = read_manifest(dst)
+    for dirpath, dirnames, filenames in os.walk(os.path.join(dst, "files")):
+        for filename in filenames:
+            f = os.path.join(dirpath, filename)
+            files.append(f)
+    for file in files:
+        sha256 = hash_from_path(file)
+        if sha256 not in manifest._manifest["files"]:
+            print(f"Garbage file {file}, remove it")
+            os.remove(file)
+
 if sys.argv[1] == "download_from_cci":
     cmd_download_from_cci(sys.argv[2], sys.argv[3])
+elif sys.argv[1] == "convert_to_list":
+    cmd_convert_to_list(sys.argv[2], sys.argv[3])
+elif sys.argv[1] == "to_lower":
+    cmd_to_lower(sys.argv[2], sys.argv[3])
+elif sys.argv[1] == "filename_to_lower":
+    cmd_filename_to_lower(sys.argv[2], sys.argv[3])
+elif sys.argv[1] == "sort_files":
+    cmd_sort_files(sys.argv[2], sys.argv[3])
+elif sys.argv[1] == "clean_for_blacklist":
+    cmd_clean_for_blacklist(sys.argv[2], sys.argv[3])
+elif sys.argv[1] == "check_consistency":
+    cmd_check_consistency(sys.argv[2], sys.argv[3])
+elif sys.argv[1] == "garbage_collection":
+    cmd_garbage_collection(sys.argv[2], sys.argv[3])
+else:
+    raise Exception(f"Unknown command {sys.argv[1]}")
